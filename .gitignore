@@ -277,3 +277,11 @@ SignClient.exe
 
 # Nerdbank versioning tool
 nbgv.exe
+
+# CodeRush setting
+.cr
+
+# JetBrains Rider settings
+.idea
+
+

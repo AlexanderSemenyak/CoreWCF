@@ -18,10 +18,14 @@ stages:
           imageName: 'windows-latest'
           targetFramework: 'netcoreapp3.1'
           testArgs: ''
+        Windows_net5.0:
+          imageName: 'windows-latest'
+          targetFramework: 'net5.0'
+          testArgs: ''
         Windows_netfx:
           imageName: 'windows-latest'
           targetFramework: 'net472'
-          testArgs: ''
+          testArgs: '--filter Category!=NetCoreOnly'
         Linux_netcore2.1:
           imageName: 'ubuntu-latest'
           targetFramework: 'netcoreapp2.1'
@@ -29,6 +33,10 @@ stages:
         Linux_netcore3.1:
           imageName: 'ubuntu-latest'
           targetFramework: 'netcoreapp3.1'
+          testArgs: '--filter Category!=WindowsOnly'
+        Linux_net5.0:
+          imageName: 'ubuntu-latest'
+          targetFramework: 'net5.0'
           testArgs: '--filter Category!=WindowsOnly'
     displayName: Test Release
     pool:
@@ -40,26 +48,39 @@ stages:
         source: current
         artifact: ReleaseBuild
         path: $(System.DefaultWorkingDirectory)/bin
+
     - task: DotNetCoreCLI@2
       displayName: Restore packages
       inputs:
         command: 'build'
         projects: ${{ parameters.testProjects}}
         arguments: '--configuration Release /t:restore'
+
+    - task: SonarCloudPrepare@1
+      displayName: 'Prepare analysis on SonarCloud'
+      inputs:
+        SonarCloud: SonarCloud
+        organization: corewcf
+        projectKey: CoreWCF_CoreWCF
+        projectName: 'CoreWCF'
+      condition: and(not(eq(variables['build.reason'], 'PullRequest')), and(eq(variables.imageName, 'windows-latest'), eq(variables.targetFramework, 'net5.0')))
+
     - task: DotNetCoreCLI@2
       displayName: Build test projects
       inputs:
         command: 'build'
         projects: ${{ parameters.testProjects}}
         arguments: '--configuration Release --framework $(targetFramework)'
+
     - task: DotNetCoreCLI@2
       displayName: Run Tests
-      timeoutInMinutes: 5
+      timeoutInMinutes: 10
       inputs:
         command: 'test'
         projects: ${{ parameters.testProjects}}
         publishTestResults: true
         arguments: '--no-restore --no-build --configuration Release --framework $(targetFramework) $(testArgs)'
+
   - job: TestDebug
     strategy:
       matrix:
@@ -70,11 +91,15 @@ stages:
         Windows_netcore3.1:
           imageName: 'windows-latest'
           targetFramework: 'netcoreapp3.1'
+          testArgs: ''       
+        Windows_net5.0:
+          imageName: 'windows-latest'
+          targetFramework: 'net5.0'
           testArgs: ''
         Windows_netfx:
           imageName: 'windows-latest'
           targetFramework: 'net472'
-          testArgs: ''
+          testArgs: '--filter Category!=NetCoreOnly'
         Linux_netcore2.1:
           imageName: 'ubuntu-latest'
           targetFramework: 'netcoreapp2.1'
@@ -82,6 +107,10 @@ stages:
         Linux_netcore3.1:
           imageName: 'ubuntu-latest'
           targetFramework: 'netcoreapp3.1'
+          testArgs: '--filter Category!=WindowsOnly'
+        Linux_net5.0:
+          imageName: 'ubuntu-latest'
+          targetFramework: 'net5.0'
           testArgs: '--filter Category!=WindowsOnly'
     displayName: Test Debug
     pool:
@@ -93,26 +122,30 @@ stages:
         source: current
         artifact: DebugBuild
         path: $(System.DefaultWorkingDirectory)/bin
+
     - task: DotNetCoreCLI@2
       displayName: Restore packages
       inputs:
         command: 'build'
         projects: ${{ parameters.testProjects}}
         arguments: '--configuration Debug /t:restore'
+        
     - task: DotNetCoreCLI@2
       displayName: Build test projects
       inputs:
         command: 'build'
         projects: ${{ parameters.testProjects}}
         arguments: '--configuration Debug --framework $(targetFramework)'
+
     - task: DotNetCoreCLI@2
       displayName: Run Tests
-      timeoutInMinutes: 5
+      timeoutInMinutes: 10
       inputs:
         command: 'test'
         projects: ${{ parameters.testProjects}}
         publishTestResults: true
         arguments: '--no-restore --no-build --configuration Debug --framework $(targetFramework) $(testArgs)'
+
   - job: CodeCoverage
     displayName: Code Coverage
     pool:
@@ -129,24 +162,37 @@ stages:
         command: 'custom'
         custom: 'tool'
         arguments: 'install -g dotnet-reportgenerator-globaltool --version 4.6.1'
+
     - task: DownloadPipelineArtifact@2
       displayName: Download build artifacts
       inputs:
         source: current
         artifact: ReleaseBuild
         path: $(System.DefaultWorkingDirectory)/bin
+
     - task: DotNetCoreCLI@2
       displayName: Restore packages
       inputs:
         command: 'build'
         projects: ${{ parameters.testProjects}}
         arguments: '--configuration Release /t:restore'
+
+    - task: SonarCloudPrepare@1
+      displayName: 'Prepare analysis on SonarCloud'
+      inputs:
+        SonarCloud: SonarCloud
+        organization: corewcf
+        projectKey: CoreWCF_CoreWCF
+        projectName: 'CoreWCF Code Coverage'
+      condition: not(eq(variables['build.reason'], 'PullRequest'))
+
     - task: DotNetCoreCLI@2
       displayName: Build test projects
       inputs:
         command: 'build'
         projects: ${{ parameters.testProjects}}
         arguments: '--configuration Release --framework netcoreapp3.1'
+
     - task: DotNetCoreCLI@2
       displayName: Run Tests with Coverage
       timeoutInMinutes: 10
@@ -155,8 +201,10 @@ stages:
         projects: ${{ parameters.testProjects}}
         publishTestResults: true
         arguments: '--no-restore --no-build --configuration Release --framework netcoreapp3.1 /p:CollectCoverage=true /p:CoverletOutputDir=$(Build.ArtifactStagingDirectory)/Coverage'
+
     - script: reportgenerator "-reports:$(Build.ArtifactStagingDirectory)/Coverage/*.xml" "-targetdir:$(Build.ArtifactStagingDirectory)/Coverage/Report" -reporttypes:HtmlInline_AzurePipelines;Cobertura;Badges
       displayName: 'Generate Coverage Report'
+
     - task: PublishCodeCoverageResults@1
       displayName: Publish Code Coverage report
       inputs:

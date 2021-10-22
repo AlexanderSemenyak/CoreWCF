@@ -299,14 +299,14 @@ namespace CoreWCF.Dispatcher
         protected ServerSecurityChannelDispatcher(SecurityServiceDispatcher securityServiceDispatcher, UChannel innerChannel, SecurityProtocol securityProtocol, SecurityListenerSettingsLifetimeManager settingsLifetimeManager)
         {
             SecurityProtocol = securityProtocol;
-            OuterChannel = (IReplyChannel)innerChannel;
+            OuterChannel = (IChannel)innerChannel;
             _serviceProvider = OuterChannel.GetProperty<IServiceScopeFactory>().CreateScope().ServiceProvider;
             _secureConversationCloseAction = securityProtocol.SecurityProtocolFactory.StandardsManager.SecureConversationDriver.CloseAction.Value;
         }
 
         internal SecurityProtocol SecurityProtocol { get; set; }
 
-        public IReplyChannel OuterChannel { get; private set; }
+        public IChannel OuterChannel { get; private set; }
 
         public T GetProperty<T>() where T : class
         {
@@ -335,25 +335,25 @@ namespace CoreWCF.Dispatcher
             }
         }
 
-        internal SecurityProtocolCorrelationState VerifyIncomingMessage(ref Message message, TimeSpan timeout, params SecurityProtocolCorrelationState[] correlationState)
+        internal async ValueTask<(Message, SecurityProtocolCorrelationState)> VerifyIncomingMessageAsync(Message message, TimeSpan timeout, params SecurityProtocolCorrelationState[] correlationState)
         {
             if (message == null)
             {
-                return null;
+                return (null, null);
             }
             Fx.Assert(SecurityProtocol != null, "SecurityProtocol can't be null");
             ThrowIfSecureConversationCloseMessage(message);
-            return SecurityProtocol.VerifyIncomingMessage(ref message, timeout, correlationState);
+            return await SecurityProtocol.VerifyIncomingMessageAsync(message, timeout, correlationState);
         }
 
-        internal void VerifyIncomingMessage(ref Message message, TimeSpan timeout)
+        internal ValueTask<Message> VerifyIncomingMessageAsync(Message message, TimeSpan timeout)
         {
             if (message == null)
             {
-                return;
+                return new ValueTask<Message>((Message)null);
             }
             ThrowIfSecureConversationCloseMessage(message);
-            SecurityProtocol.VerifyIncomingMessage(ref message, timeout);
+            return SecurityProtocol.VerifyIncomingMessageAsync(message, timeout);
         }
 
         public abstract Task DispatchAsync(RequestContext context);
@@ -389,7 +389,7 @@ namespace CoreWCF.Dispatcher
         public CommunicationState State => OuterChannel.State;
 
 
-        internal RequestContext ProcessReceivedRequest(RequestContext requestContext)
+        internal async ValueTask<RequestContext> ProcessReceivedRequestAsync(RequestContext requestContext)
         {
             if (requestContext == null)
             {
@@ -405,7 +405,10 @@ namespace CoreWCF.Dispatcher
             }
             try
             {
-                SecurityProtocolCorrelationState correlationState = VerifyIncomingMessage(ref message, timeoutHelper.RemainingTime(), null);
+                (Message message, SecurityProtocolCorrelationState correlationState) verifiedIncomingMessage = await VerifyIncomingMessageAsync(message, timeoutHelper.RemainingTime(), null);
+                message = verifiedIncomingMessage.message;
+                SecurityProtocolCorrelationState correlationState = verifiedIncomingMessage.correlationState;
+
                 if (message.Headers.RelatesTo == null && message.Headers.MessageId != null)
                 {
                     message.Headers.RelatesTo = message.Headers.MessageId;
@@ -454,7 +457,7 @@ namespace CoreWCF.Dispatcher
 
         public override async Task DispatchAsync(RequestContext context)
         {
-            SecurityRequestContext securedMessage = (SecurityRequestContext)ProcessReceivedRequest(context);
+            SecurityRequestContext securedMessage = (SecurityRequestContext)(await ProcessReceivedRequestAsync(context));
             if (SecurityServiceDispatcher.SessionMode) // for SCT, sessiontoken is created so we channel the call to SecurityAuthentication and evevntually SecurityServerSession.
             {
                 IServiceChannelDispatcher serviceChannelDispatcher =
@@ -501,12 +504,12 @@ namespace CoreWCF.Dispatcher
         }
     }
 
-    internal abstract class SecurityDuplexChannel<UChannel> : IServiceChannelDispatcher where UChannel : class
+    internal abstract class SecurityDuplexChannel<UChannel> : ServerSecurityChannelDispatcher<UChannel> where UChannel : class, IDuplexChannel
     {
         private readonly IDuplexChannel _innerDuplexChannel;
         private readonly IServiceProvider _serviceProvider;
-        public SecurityDuplexChannel(SecurityServiceDispatcher serviceDispatcher, IDuplexChannel innerChannel, SecurityProtocol securityProtocol, SecurityListenerSettingsLifetimeManager settingsLifetimeManager)
-        //  : base(channelManager, innerChannel, securityProtocol, settingsLifetimeManager)
+        public SecurityDuplexChannel(SecurityServiceDispatcher serviceDispatcher, UChannel innerChannel, SecurityProtocol securityProtocol, SecurityListenerSettingsLifetimeManager settingsLifetimeManager)
+          : base(serviceDispatcher, innerChannel, securityProtocol, settingsLifetimeManager)
         {
             _innerDuplexChannel = innerChannel;
             SecurityProtocol = securityProtocol;
@@ -527,19 +530,6 @@ namespace CoreWCF.Dispatcher
         {
             get { return _innerDuplexChannel; }
         }
-
-        internal SecurityProtocol SecurityProtocol { get; set; }
-
-        //  public IReplyChannel OuterChannel { get; private set; }
-
-        public T GetProperty<T>() where T : class
-        {
-            T tObj = _serviceProvider.GetService<T>();
-            return tObj ?? InnerDuplexChannel.GetProperty<T>();
-        }
-
-        public abstract Task DispatchAsync(RequestContext context);
-        public abstract Task DispatchAsync(Message message);
 
         public Task SendAsync(Message message, TimeSpan timeout)
         {
@@ -612,7 +602,7 @@ namespace CoreWCF.Dispatcher
         public override async Task DispatchAsync(Message message)
         {
             Fx.Assert(State == CommunicationState.Opened, "Expected dispatcher state to be Opened, instead it's " + State.ToString());
-            ProcessInnerItem(message, ServiceDefaults.SendTimeout);
+            message = await ProcessInnerItemAsync(message, ServiceDefaults.SendTimeout);
             if (_serviceChannelDispatcher == null)
             {
                 _serviceChannelDispatcher = await SecurityServiceDispatcher.
@@ -631,13 +621,28 @@ namespace CoreWCF.Dispatcher
             return SendAsync(message);
         }
 
-        private Message ProcessInnerItem(Message innerItem, TimeSpan timeout)
+        private async ValueTask<Message> ProcessInnerItemAsync(Message innerItem, TimeSpan timeout)
         {
             if (innerItem == null)
             {
                 return null;
             }
-            SecurityProtocol.VerifyIncomingMessage(ref innerItem, timeout);
+            TimeoutHelper timeoutHelper = new TimeoutHelper(timeout);
+            Exception securityException = null;
+            Message unverifiedMessage = innerItem;
+            try
+            {
+                innerItem = await VerifyIncomingMessageAsync(innerItem, timeout);
+            }
+            catch (MessageSecurityException e)
+            {
+                securityException = e;
+            }
+            if (securityException != null)
+            {
+                SendFaultIfRequired(securityException, unverifiedMessage, timeoutHelper.RemainingTime());
+                return null;
+            }
             return innerItem;
         }
 

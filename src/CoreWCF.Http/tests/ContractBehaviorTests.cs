@@ -93,6 +93,9 @@ namespace CoreWCF.Http.Tests
         public static ChannelFactory<T> GetChannelFactory<T>()
         {
             System.ServiceModel.BasicHttpBinding httpBinding = ClientHelper.GetBufferedModeBinding();
+            // SSM 4.9.0-rc1 https://github.com/CoreWCF/CoreWCF/pull/442#discussion_r712491578
+            GC.Collect(2);
+            GC.Collect(2);
             return new ChannelFactory<T>(httpBinding, new System.ServiceModel.EndpointAddress(new Uri("http://localhost:8080/BasicWcfService/ContractBehaviorService.svc")));
         }
 
@@ -246,7 +249,8 @@ namespace CoreWCF.Http.Tests
                 cf.Endpoint.Contract.ContractBehaviors.Add(theBehavior);
                 cf.Open();
                 string expected = "IContractBehavior:ClientContract.MyMultiFacetedBehaviorAttribute;";
-                Assert.Equal(expected, BehaviorInvokedVerifier.ValidateClientInvokedBehavior(cf.Endpoint));
+                string actual = BehaviorInvokedVerifier.ValidateClientInvokedBehavior(cf.Endpoint);
+                Assert.Equal(expected, actual);
                 IContractBehaviorBasic_ByHand clientProxy = cf.CreateChannel();
                 string HelloStr = "ByHandImplementsOther";
                 string returnStr = clientProxy.StringMethod(HelloStr);
