@@ -5,12 +5,10 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
-using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using CoreWCF.Channels;
 using CoreWCF.Collections.Generic;
 using CoreWCF.Configuration;
 using CoreWCF.Description;
@@ -80,6 +78,8 @@ namespace CoreWCF
 
             if (serviceBehavior.InstanceContextMode == InstanceContextMode.Single)
             {
+                serviceBehavior.ServicePovider = _serviceProvider;
+
                 // If using Single, then ServiceBehavior fetched/created the instance and need to set on SingletonInstance
                 Debug.Assert(serviceInstanceUsedAsABehavior != null, "Service behavior should have created a singleton instance");
                 SingletonInstance = serviceInstanceUsedAsABehavior;
@@ -179,10 +179,10 @@ namespace CoreWCF
                     return true;
                 }
 
-                //if (this.behaviors.Contains(typeof(ServiceMetadataBehavior)) && ServiceMetadataBehavior.IsMetadataImplementedType(implementedContract))
-                //{
-                //    return true;
-                //}
+                if (_behaviors.Contains(typeof(ServiceMetadataBehavior)) && ServiceMetadataBehavior.IsMetadataImplementedType(implementedContract))
+                {
+                    return true;
+                }
 
                 return false;
             }
@@ -194,10 +194,10 @@ namespace CoreWCF
                     return ReflectedContractCollection.GetConfigKey(_reflectedContracts[implementedContract]);
                 }
 
-                //if (this.behaviors.Contains(typeof(ServiceMetadataBehavior)) && ServiceMetadataBehavior.IsMetadataImplementedType(implementedContract))
-                //{
-                //    return ServiceMetadataBehavior.MexContractName;
-                //}
+                if (_behaviors.Contains(typeof(ServiceMetadataBehavior)) && ServiceMetadataBehavior.IsMetadataImplementedType(implementedContract))
+                {
+                    return ServiceMetadataBehavior.MexContractName;
+                }
 
                 throw DiagnosticUtility.ExceptionUtility.ThrowHelperError(new InvalidOperationException(SR.Format(SR.SfxReflectedContractKeyNotFound2, implementedContract.FullName, string.Empty)));
             }
@@ -253,7 +253,17 @@ namespace CoreWCF
             {
                 address = "https://localhost" + address.Substring(9);
             }
-
+            else if (address.StartsWith("https://*.", StringComparison.OrdinalIgnoreCase) ||
+                    address.StartsWith("http://*.", StringComparison.OrdinalIgnoreCase))
+            {
+                int colonIndex = address.IndexOf(':');
+                string beforeAsterisk = address.Substring(0, colonIndex + 3);
+                string rest = address.Substring(colonIndex + 4);
+                StringBuilder sb = new StringBuilder(beforeAsterisk);
+                sb.Append(System.Net.Dns.GetHostName());
+                sb.Append(rest);
+                address = sb.ToString();
+            }
             return new Uri(address);
         }
 

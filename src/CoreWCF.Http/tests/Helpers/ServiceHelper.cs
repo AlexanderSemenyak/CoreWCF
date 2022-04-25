@@ -81,6 +81,9 @@ namespace Helpers
         //    };
         //}
 
+#if NET5_0_OR_GREATER
+        [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+#endif
         public static IWebHostBuilder CreateHttpSysBuilder<TStartup>(ITestOutputHelper outputHelper = default) where TStartup : class =>
             WebHost.CreateDefaultBuilder(Array.Empty<string>())
 #if DEBUG
@@ -127,6 +130,7 @@ namespace Helpers
                     });
                 })
             .UseStartup<TStartup>();
+
         public static IWebHostBuilder CreateWebHostBuilder(ITestOutputHelper outputHelper, Type startupType) =>
             WebHost.CreateDefaultBuilder(Array.Empty<string>())
 #if DEBUG
@@ -178,7 +182,7 @@ namespace Helpers
                         listenOptions.UseConnectionLogging();
                     }
                 });
-                options.Listen(address: IPAddress.Loopback, 8443, listenOptions =>
+                options.Listen(address: IPAddress.Any, 8443, listenOptions =>
                 {
                     listenOptions.UseHttps(httpsOptions =>
                     {
